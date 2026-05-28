@@ -248,7 +248,63 @@ The attack activates when:
 
 > **Important:** Do not run mitm6 for more than **10 minutes** in a real environment. Prolonged execution disrupts legitimate IPv6 traffic and can cause network instability.
 
-> **Lab status:** This attack vector is documented from course material (TCM PEH). Lab execution pending — the `lootme/` output will be updated once the attack is run against this environment.
+**Loot captured in `lootme/` directory:**
+
+```
+domain_computers.html / .json / .grep
+domain_computers_by_os.html
+domain_groups.html / .json / .grep
+domain_policy.html / .json / .grep
+domain_trusts.html / .json / .grep
+domain_users.html / .json / .grep
+domain_users_by_group.html
+```
+
+ntlmrelayx.py successfully relayed the captured credential to LDAPS on HYDRA-DC and performed a full LDAP enumeration of the MARVEL.local domain.
+
+**Domain users exfiltrated (`domain_users.grep`):**
+
+| User | sAMAccountName | Groups | Flag |
+|------|---------------|--------|------|
+| Tony Stark | tstark | Domain Admins, Enterprise Admins, Schema Admins | — |
+| SQLService | SQLService | Domain Admins, Enterprise Admins, Schema Admins | ⚠️ **Password in description** |
+| Frank Castle | fcastle | Domain Users | — |
+| Peter Parker | pparker | Domain Users | — |
+| Administrator | Administrator | Domain Admins, Enterprise Admins, Schema Admins | — |
+| Guest | Guest | Guests | Disabled |
+| krbtgt | krbtgt | — | Disabled |
+
+**Critical finding — password stored in user description field:**
+
+The `SQLService` account description contained:
+```
+The password is MYpassword123#
+```
+
+This account is a member of Domain Admins, Enterprise Admins, Schema Admins, and Administrators — full domain compromise from a single LDAP read. Storing credentials in AD description fields is a common misconfiguration; the field is readable by any authenticated domain user.
+
+**Notable groups exfiltrated (`domain_groups.grep`):**
+
+| Group | Security relevance |
+|-------|--------------------|
+| Domain Admins | Full domain control |
+| Enterprise Admins | Forest-wide admin rights |
+| Schema Admins | Can modify AD schema |
+| DnsAdmins | Members can load arbitrary DLLs on the DC (privilege escalation path) |
+| Group Policy Creator Owners | Can create/modify GPOs — lateral movement path |
+| Backup Operators | Can read any file on DCs, including NTDS.dit |
+
+**Domain password policy (`domain_policy.grep`):**
+
+| Setting | Value | Security implication |
+|---------|-------|----------------------|
+| lockoutThreshold | **0** | ⚠️ No account lockout — brute force and password spraying are unconstrained |
+| minPwdLength | 7 | Weak minimum — short passwords allowed |
+| maxPwdAge | 42 days | Passwords expire in ~6 weeks |
+| pwdProperties | PASSWORD_COMPLEX | Complexity required |
+| ms-DS-MachineAccountQuota | **10** | Any domain user can add up to 10 computer accounts — relevant for delegation attacks |
+
+The `lockoutThreshold = 0` combined with recovered credentials makes lateral movement trivial: password spraying can be run indefinitely without risk of locking out accounts.
 
 ### Mitigation
 
@@ -265,7 +321,7 @@ The attack activates when:
 |--------|--------------------|--------|
 | LLMNR Poisoning | Victim triggers failed DNS resolution | NTLMv2 hash captured → cracked offline (`fcastle:Password1`) |
 | SMB Relay | SMB signing disabled + victim is local admin on target | SAM hashes dumped from SPIDERMAN (5 accounts) |
-| DNS Takeover via mitm6 | IPv6 enabled (Windows default) | LDAP data exfiltration, potential domain escalation |
+| DNS Takeover via mitm6 | IPv6 enabled (Windows default) | Full LDAP enumeration (users, groups, policy, trusts) + Domain Admin password recovered from description field |
 
 ---
 
